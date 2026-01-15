@@ -4,6 +4,7 @@ import type {
   ContributionData,
   RepositoryContribution,
   GraphQLUserResponse,
+  CommitLOCData,
 } from "../types";
 
 const CONTRIBUTIONS_QUERY = `
@@ -161,4 +162,125 @@ export async function fetchUserContributions(
     totalContributions,
     repositoryContributions: aggregated,
   };
+}
+
+interface SearchCommitItem {
+  sha: string;
+  commit: {
+    author: {
+      date: string;
+    };
+  };
+  repository: {
+    full_name: string;
+  };
+}
+
+interface SearchCommitsResponse {
+  total_count: number;
+  incomplete_results: boolean;
+  items: SearchCommitItem[];
+}
+
+function splitIntoMonthChunks(
+  since: Date,
+  until: Date
+): Array<{ from: Date; to: Date }> {
+  const chunks: Array<{ from: Date; to: Date }> = [];
+
+  let current = new Date(since);
+  while (current < until) {
+    const chunkEnd = new Date(current.getFullYear(), current.getMonth() + 1, 0);
+    const actualEnd = chunkEnd > until ? until : chunkEnd;
+    chunks.push({ from: new Date(current), to: actualEnd });
+    current = new Date(current.getFullYear(), current.getMonth() + 1, 1);
+  }
+
+  return chunks;
+}
+
+export async function fetchUserLOCData(
+  username: string,
+  since: Date,
+  until: Date
+): Promise<CommitLOCData[]> {
+  const client = getOctokit();
+  const results: CommitLOCData[] = [];
+  const seenShas = new Set<string>();
+
+  const chunks = splitIntoMonthChunks(since, until);
+  let processedChunks = 0;
+
+  for (const chunk of chunks) {
+    processedChunks++;
+    const sinceStr = chunk.from.toISOString().slice(0, 10);
+    const untilStr = chunk.to.toISOString().slice(0, 10);
+    const query = `author:${username} committer-date:${sinceStr}..${untilStr}`;
+
+    let page = 1;
+    const perPage = 100;
+    let hasMore = true;
+
+    while (hasMore) {
+      const response = await client.request("GET /search/commits", {
+        q: query,
+        per_page: perPage,
+        page,
+        headers: {
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      });
+
+      const data = response.data as SearchCommitsResponse;
+
+      if (data.items.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const item of data.items) {
+        if (seenShas.has(item.sha)) continue;
+        seenShas.add(item.sha);
+
+        const parts = item.repository.full_name.split("/");
+        const owner = parts[0];
+        const repo = parts[1];
+
+        if (!owner || !repo) continue;
+
+        try {
+          const commitResponse = await client.rest.repos.getCommit({
+            owner,
+            repo,
+            ref: item.sha,
+          });
+
+          const stats = commitResponse.data.stats;
+          if (stats) {
+            results.push({
+              date: item.commit.author.date,
+              additions: stats.additions ?? 0,
+              deletions: stats.deletions ?? 0,
+            });
+          }
+        } catch {
+          // Skip commits we can't access (private repos, deleted repos, etc.)
+          continue;
+        }
+      }
+
+      if (data.items.length < perPage || page * perPage >= 1000) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+
+    // Progress indicator
+    if (processedChunks % 12 === 0 || processedChunks === chunks.length) {
+      console.log(`  Processed ${processedChunks}/${chunks.length} months (${results.length} commits found)`);
+    }
+  }
+
+  return results;
 }

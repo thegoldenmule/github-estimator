@@ -67,3 +67,38 @@ export interface ContributionData {
   totalContributions: number;
   repositoryContributions: RepositoryContribution[];
 }
+
+// LOC Command types
+export type LOCGranularity = "month" | "year";
+
+export interface LOCPeriodEntry {
+  period: string; // "March 2024" or "2024"
+  periodKey: string; // "2024-03" or "2024" (for sorting)
+  additions: number;
+  deletions: number;
+  total: number; // additions + deletions
+  net: number;
+  commits: number;
+}
+
+export interface LOCResult {
+  user: string;
+  since: string;
+  until: string;
+  granularity: LOCGranularity;
+  totals: { additions: number; deletions: number; total: number; net: number; commits: number };
+  entries: LOCPeriodEntry[];
+}
+
+export interface LOCOptions {
+  user: string;
+  since?: string;
+  until?: string;
+  granularity: LOCGranularity;
+}
+
+export interface CommitLOCData {
+  date: string;
+  additions: number;
+  deletions: number;
+}
