@@ -32,7 +32,7 @@ export async function generatePDF(
       0
     );
 
-    doc.fontSize(22).font("Helvetica-Bold").text("GitHub Contribution Report", {
+    doc.fontSize(22).font("Helvetica-Bold").text("Contribution Report", {
       align: "center",
     });
     doc.moveDown(0.5);
@@ -76,10 +76,14 @@ export async function generatePDF(
 }
 
 function drawPieChart(doc: PDFKit.PDFDocument, summary: SummaryRow[]): void {
-  const centerX = PAGE_WIDTH / 2;
-  const chartY = doc.y;
   const radius = 90;
+  const chartY = doc.y;
+  // Pie chart on the right half
+  const centerX = PAGE_WIDTH - MARGIN - radius;
   const centerY = chartY + radius;
+  // Legend on the left half
+  const legendX = MARGIN;
+  const legendWidth = PAGE_WIDTH - 2 * MARGIN - radius * 2 - 30;
 
   const total = summary.reduce((sum, r) => sum + r.contributions, 0);
   if (total === 0) return;
@@ -96,19 +100,18 @@ function drawPieChart(doc: PDFKit.PDFDocument, summary: SummaryRow[]): void {
     startAngle = endAngle;
   }
 
-  // Legend
-  const legendX = MARGIN;
-  let legendY = chartY + radius * 2 + 20;
-
-  checkPageBreak(doc, legendY + summary.length * 16);
-
-  // If page broke, update legendY
-  legendY = doc.y;
+  // Legend on the left, vertically aligned with pie chart
+  let legendY = chartY;
 
   doc.fontSize(9).font("Helvetica");
   for (let i = 0; i < summary.length; i++) {
     const row = summary[i]!;
     const color = COLORS[i % COLORS.length]!;
+
+    if (legendY + 16 > PAGE_HEIGHT - MARGIN) {
+      doc.addPage();
+      legendY = MARGIN;
+    }
 
     doc.rect(legendX, legendY, 10, 10).fill(color);
     doc
@@ -117,12 +120,14 @@ function drawPieChart(doc: PDFKit.PDFDocument, summary: SummaryRow[]): void {
         `${row.repository} — ${row.percentage}% (${row.contributions})`,
         legendX + 16,
         legendY + 1,
-        { width: CONTENT_WIDTH - 16 }
+        { width: legendWidth }
       );
     legendY += 16;
   }
 
-  doc.y = legendY + 10;
+  // Move past whichever is taller: pie chart or legend
+  const pieBottom = chartY + radius * 2 + 10;
+  doc.y = Math.max(pieBottom, legendY + 10);
   doc.fillColor("#000000");
 }
 

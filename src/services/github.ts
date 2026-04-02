@@ -126,7 +126,8 @@ export async function fetchUserContributions(
 ): Promise<ContributionData> {
   const client = getOctokit();
 
-  const chunks = splitIntoYearChunks(since, until);
+  // Use monthly chunks to stay under the maxRepositories:100 limit per query
+  const chunks = splitIntoMonthChunks(since, until);
 
   const allContributions: RepositoryContribution[] = [];
   let totalContributions = 0;
