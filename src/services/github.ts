@@ -287,66 +287,124 @@ export async function fetchUserLOCData(
   return results;
 }
 
+const REPO_COMMITS_QUERY = `
+  query($owner: String!, $name: String!, $since: GitTimestamp!, $until: GitTimestamp!, $authorId: ID!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      defaultBranchRef {
+        target {
+          ... on Commit {
+            history(since: $since, until: $until, author: { id: $authorId }, first: 100, after: $after) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              nodes {
+                oid
+                committedDate
+                message
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const USER_ID_QUERY = `
+  query($username: String!) {
+    user(login: $username) {
+      id
+    }
+  }
+`;
+
+interface RepoCommitsResponse {
+  repository: {
+    defaultBranchRef: {
+      target: {
+        history: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: Array<{
+            oid: string;
+            committedDate: string;
+            message: string;
+          }>;
+        };
+      };
+    } | null;
+  } | null;
+}
+
+interface UserIdResponse {
+  user: { id: string } | null;
+}
+
 export async function fetchUserCommitDetails(
   username: string,
   since: Date,
-  until: Date
+  until: Date,
+  repos: RepositoryContribution[]
 ): Promise<CommitDetail[]> {
   const client = getOctokit();
   const results: CommitDetail[] = [];
-  const seenShas = new Set<string>();
 
-  const chunks = splitIntoMonthChunks(since, until);
-  let processedChunks = 0;
+  // Get the user's GraphQL node ID for author filtering
+  const userResponse = await client.graphql<UserIdResponse>(USER_ID_QUERY, {
+    username,
+  });
+  if (!userResponse.user) {
+    throw new Error(`User "${username}" not found`);
+  }
+  const authorId = userResponse.user.id;
 
-  for (const chunk of chunks) {
-    processedChunks++;
-    const sinceStr = chunk.from.toISOString().slice(0, 10);
-    const untilStr = chunk.to.toISOString().slice(0, 10);
-    const query = `author:${username} committer-date:${sinceStr}..${untilStr}`;
+  let processedRepos = 0;
 
-    let page = 1;
-    const perPage = 100;
-    let hasMore = true;
+  for (const repo of repos) {
+    processedRepos++;
+    const [owner, name] = repo.repo.split("/");
+    if (!owner || !name) continue;
 
-    while (hasMore) {
-      const response = await client.request("GET /search/commits", {
-        q: query,
-        per_page: perPage,
-        page,
-        headers: {
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-      });
+    let after: string | null = null;
+    let hasNextPage = true;
 
-      const data = response.data as SearchCommitsResponse;
+    try {
+      while (hasNextPage) {
+        const response: RepoCommitsResponse =
+          await client.graphql<RepoCommitsResponse>(REPO_COMMITS_QUERY, {
+            owner,
+            name,
+            since: since.toISOString(),
+            until: until.toISOString(),
+            authorId,
+            after,
+          });
 
-      if (data.items.length === 0) {
-        hasMore = false;
-        break;
+        const branch = response.repository?.defaultBranchRef;
+        if (!branch) break;
+
+        const history = branch.target.history;
+        for (const node of history.nodes) {
+          results.push({
+            sha: node.oid,
+            date: node.committedDate,
+            repository: repo.repo,
+            message: node.message.split("\n")[0] ?? "",
+          });
+        }
+
+        hasNextPage = history.pageInfo.hasNextPage;
+        after = history.pageInfo.endCursor;
       }
-
-      for (const item of data.items) {
-        if (seenShas.has(item.sha)) continue;
-        seenShas.add(item.sha);
-
-        results.push({
-          sha: item.sha,
-          date: item.commit.author.date,
-          repository: item.repository.full_name,
-          message: item.commit.message.split("\n")[0] ?? "",
-        });
-      }
-
-      if (data.items.length < perPage || page * perPage >= 1000) {
-        hasMore = false;
-      } else {
-        page++;
-      }
+    } catch {
+      // Skip repos we can't access
+      continue;
     }
 
-    if (processedChunks % 12 === 0 || processedChunks === chunks.length) {
-      console.log(`  Processed ${processedChunks}/${chunks.length} months (${results.length} commits found)`);
+    if (processedRepos % 10 === 0 || processedRepos === repos.length) {
+      console.log(
+        `  Processed ${processedRepos}/${repos.length} repos (${results.length} commits found)`
+      );
     }
   }
 

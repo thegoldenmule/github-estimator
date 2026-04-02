@@ -39,10 +39,23 @@ export function createReportCommand(): Command {
           `Fetching data for ${options.user} (${sinceStr} to ${untilStr})...`
         );
 
-        const [contributionData, commits] = await Promise.all([
-          fetchUserContributions(options.user, since, until),
-          fetchUserCommitDetails(options.user, since, until),
-        ]);
+        const contributionData = await fetchUserContributions(
+          options.user,
+          since,
+          until
+        );
+
+        console.log(
+          `Found ${contributionData.totalContributions} contributions across ${contributionData.repositoryContributions.length} repos`
+        );
+        console.log(`Fetching commit details...`);
+
+        const commits = await fetchUserCommitDetails(
+          options.user,
+          since,
+          until,
+          contributionData.repositoryContributions
+        );
 
         console.log(
           `Found ${contributionData.totalContributions} contributions, ${commits.length} commits`
