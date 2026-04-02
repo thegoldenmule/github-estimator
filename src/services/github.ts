@@ -287,59 +287,6 @@ export async function fetchUserLOCData(
   return results;
 }
 
-const REPO_COMMITS_QUERY = `
-  query($owner: String!, $name: String!, $since: GitTimestamp!, $until: GitTimestamp!, $authorId: ID!, $after: String) {
-    repository(owner: $owner, name: $name) {
-      defaultBranchRef {
-        target {
-          ... on Commit {
-            history(since: $since, until: $until, author: { id: $authorId }, first: 100, after: $after) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              nodes {
-                oid
-                committedDate
-                message
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
-const USER_ID_QUERY = `
-  query($username: String!) {
-    user(login: $username) {
-      id
-    }
-  }
-`;
-
-interface RepoCommitsResponse {
-  repository: {
-    defaultBranchRef: {
-      target: {
-        history: {
-          pageInfo: { hasNextPage: boolean; endCursor: string | null };
-          nodes: Array<{
-            oid: string;
-            committedDate: string;
-            message: string;
-          }>;
-        };
-      };
-    } | null;
-  } | null;
-}
-
-interface UserIdResponse {
-  user: { id: string } | null;
-}
-
 export async function fetchUserCommitDetails(
   username: string,
   since: Date,
@@ -348,56 +295,58 @@ export async function fetchUserCommitDetails(
 ): Promise<CommitDetail[]> {
   const client = getOctokit();
   const results: CommitDetail[] = [];
-
-  // Get the user's GraphQL node ID for author filtering
-  const userResponse = await client.graphql<UserIdResponse>(USER_ID_QUERY, {
-    username,
-  });
-  if (!userResponse.user) {
-    throw new Error(`User "${username}" not found`);
-  }
-  const authorId = userResponse.user.id;
+  const seenShas = new Set<string>();
 
   let processedRepos = 0;
 
   for (const repo of repos) {
     processedRepos++;
-    const [owner, name] = repo.repo.split("/");
-    if (!owner || !name) continue;
+    const sinceStr = since.toISOString().slice(0, 10);
+    const untilStr = until.toISOString().slice(0, 10);
+    const query = `author:${username} repo:${repo.repo} committer-date:${sinceStr}..${untilStr}`;
 
-    let after: string | null = null;
-    let hasNextPage = true;
+    let page = 1;
+    const perPage = 100;
+    let hasMore = true;
 
     try {
-      while (hasNextPage) {
-        const response: RepoCommitsResponse =
-          await client.graphql<RepoCommitsResponse>(REPO_COMMITS_QUERY, {
-            owner,
-            name,
-            since: since.toISOString(),
-            until: until.toISOString(),
-            authorId,
-            after,
-          });
+      while (hasMore) {
+        const response = await client.request("GET /search/commits", {
+          q: query,
+          per_page: perPage,
+          page,
+          headers: {
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+        });
 
-        const branch = response.repository?.defaultBranchRef;
-        if (!branch) break;
+        const data = response.data as SearchCommitsResponse;
 
-        const history = branch.target.history;
-        for (const node of history.nodes) {
+        if (data.items.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        for (const item of data.items) {
+          if (seenShas.has(item.sha)) continue;
+          seenShas.add(item.sha);
+
           results.push({
-            sha: node.oid,
-            date: node.committedDate,
-            repository: repo.repo,
-            message: node.message.split("\n")[0] ?? "",
+            sha: item.sha,
+            date: item.commit.author.date,
+            repository: item.repository.full_name,
+            message: item.commit.message.split("\n")[0] ?? "",
           });
         }
 
-        hasNextPage = history.pageInfo.hasNextPage;
-        after = history.pageInfo.endCursor;
+        if (data.items.length < perPage || page * perPage >= 1000) {
+          hasMore = false;
+        } else {
+          page++;
+        }
       }
     } catch {
-      // Skip repos we can't access
+      console.warn(`  Warning: could not access ${repo.repo}, skipping`);
       continue;
     }
 

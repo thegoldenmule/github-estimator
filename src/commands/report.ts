@@ -46,9 +46,9 @@ export function createReportCommand(): Command {
         );
 
         console.log(
-          `Found ${contributionData.totalContributions} contributions across ${contributionData.repositoryContributions.length} repos`
+          `Found ${contributionData.totalContributions} contributions (commits, issues, PRs, reviews) across ${contributionData.repositoryContributions.length} repos`
         );
-        console.log(`Fetching commit details...`);
+        console.log(`Fetching commit details per repo...`);
 
         const commits = await fetchUserCommitDetails(
           options.user,
