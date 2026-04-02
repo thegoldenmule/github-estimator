@@ -288,72 +288,105 @@ export async function fetchUserLOCData(
   return results;
 }
 
+/**
+ * Fetches all repos the authenticated user has access to via REST API.
+ * This works with fine-grained tokens, unlike GraphQL contributionsCollection.
+ */
+export async function fetchUserRepos(): Promise<string[]> {
+  const client = getOctokit();
+  const repos: string[] = [];
+  let page = 1;
+
+  while (true) {
+    const response = await client.rest.repos.listForAuthenticatedUser({
+      per_page: 100,
+      page,
+      sort: "pushed",
+      direction: "desc",
+    });
+
+    for (const repo of response.data) {
+      repos.push(repo.full_name);
+    }
+
+    if (response.data.length < 100) break;
+    page++;
+  }
+
+  return repos;
+}
+
+/**
+ * For each repo, fetches all commits by username in the date range using REST API.
+ * Returns commits found and skips repos with no commits or access errors.
+ */
 export async function fetchUserCommitDetails(
   username: string,
   since: Date,
   until: Date,
-  repos: RepositoryContribution[]
+  repoNames: string[]
 ): Promise<CommitDetail[]> {
   const client = getOctokit();
   const results: CommitDetail[] = [];
-  const seenShas = new Set<string>();
 
   let processedRepos = 0;
+  let reposWithCommits = 0;
 
-  for (const repo of repos) {
+  for (const repoFullName of repoNames) {
     processedRepos++;
-    const sinceStr = since.toISOString().slice(0, 10);
-    const untilStr = until.toISOString().slice(0, 10);
-    const query = `author:${username} repo:${repo.repo} committer-date:${sinceStr}..${untilStr}`;
+    const [owner, name] = repoFullName.split("/");
+    if (!owner || !name) continue;
 
     let page = 1;
-    const perPage = 100;
     let hasMore = true;
+    let repoCommits = 0;
 
     try {
       while (hasMore) {
-        const response = await client.request("GET /search/commits", {
-          q: query,
-          per_page: perPage,
+        const response = await client.rest.repos.listCommits({
+          owner,
+          repo: name,
+          author: username,
+          since: since.toISOString(),
+          until: until.toISOString(),
+          per_page: 100,
           page,
-          headers: {
-            "X-GitHub-Api-Version": "2022-11-28",
-          },
         });
 
-        const data = response.data as SearchCommitsResponse;
+        if (response.data.length === 0) break;
 
-        if (data.items.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        for (const item of data.items) {
-          if (seenShas.has(item.sha)) continue;
-          seenShas.add(item.sha);
-
+        for (const commit of response.data) {
           results.push({
-            sha: item.sha,
-            date: item.commit.author.date,
-            repository: item.repository.full_name,
-            message: item.commit.message.split("\n")[0] ?? "",
+            sha: commit.sha,
+            date: commit.commit.author?.date ?? "",
+            repository: repoFullName,
+            message: (commit.commit.message ?? "").split("\n")[0] ?? "",
           });
+          repoCommits++;
         }
 
-        if (data.items.length < perPage || page * perPage >= 1000) {
+        if (response.data.length < 100) {
           hasMore = false;
         } else {
           page++;
         }
       }
-    } catch {
-      console.warn(`  Warning: could not access ${repo.repo}, skipping`);
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status !== 409) {
+        // 409 = empty repo, not worth warning about
+        console.warn(
+          `  Warning: could not access ${repoFullName} (${status ?? "unknown error"}), skipping`
+        );
+      }
       continue;
     }
 
-    if (processedRepos % 10 === 0 || processedRepos === repos.length) {
+    if (repoCommits > 0) reposWithCommits++;
+
+    if (processedRepos % 20 === 0 || processedRepos === repoNames.length) {
       console.log(
-        `  Processed ${processedRepos}/${repos.length} repos (${results.length} commits found)`
+        `  Checked ${processedRepos}/${repoNames.length} repos — ${reposWithCommits} with commits (${results.length} total)`
       );
     }
   }

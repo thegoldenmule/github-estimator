@@ -1,10 +1,10 @@
 import { Command } from "commander";
 import {
-  fetchUserContributions,
+  fetchUserRepos,
   fetchUserCommitDetails,
 } from "../services/github";
 import { writeSummaryCSV, writeCommitCSVs } from "../formatters/csv";
-import type { ReportOptions } from "../types";
+import type { ReportOptions, ContributionData, RepositoryContribution } from "../types";
 
 export function createReportCommand(): Command {
   const command = new Command("report")
@@ -39,26 +39,46 @@ export function createReportCommand(): Command {
           `Fetching data for ${options.user} (${sinceStr} to ${untilStr})...`
         );
 
-        const contributionData = await fetchUserContributions(
-          options.user,
-          since,
-          until
-        );
+        // Discover ALL repos the token has access to via REST API
+        console.log("Discovering repos...");
+        const allRepos = await fetchUserRepos();
+        console.log(`Found ${allRepos.length} accessible repos, checking each for commits...`);
 
-        console.log(
-          `Found ${contributionData.totalContributions} contributions (commits, issues, PRs, reviews) across ${contributionData.repositoryContributions.length} repos`
-        );
-        console.log(`Fetching commit details per repo...`);
-
+        // Fetch commits from every accessible repo
         const commits = await fetchUserCommitDetails(
           options.user,
           since,
           until,
-          contributionData.repositoryContributions
+          allRepos
         );
 
+        // Build summary from actual commit data
+        const repoCommitCounts = new Map<string, number>();
+        for (const commit of commits) {
+          repoCommitCounts.set(
+            commit.repository,
+            (repoCommitCounts.get(commit.repository) ?? 0) + 1
+          );
+        }
+
+        const totalCommits = commits.length;
+        const repositoryContributions: RepositoryContribution[] = [];
+        for (const [repo, count] of repoCommitCounts) {
+          repositoryContributions.push({
+            repo,
+            count,
+            isPrivate: false, // REST API doesn't easily tell us, not important for report
+          });
+        }
+        repositoryContributions.sort((a, b) => b.count - a.count);
+
+        const contributionData: ContributionData = {
+          totalContributions: totalCommits,
+          repositoryContributions,
+        };
+
         console.log(
-          `Found ${contributionData.totalContributions} contributions, ${commits.length} commits`
+          `\nFound ${totalCommits} commits across ${repositoryContributions.length} repos`
         );
 
         const summaryPath = await writeSummaryCSV(contributionData, outputDir);
