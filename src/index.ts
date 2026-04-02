@@ -2,6 +2,8 @@
 import { Command } from "commander";
 import { createAnalyzeCommand } from "./commands/analyze";
 import { createLocCommand } from "./commands/loc";
+import { createReportCommand } from "./commands/report";
+import { createPDFCommand } from "./commands/pdf";
 
 const program = new Command();
 
@@ -14,5 +16,7 @@ program
 
 program.addCommand(createAnalyzeCommand());
 program.addCommand(createLocCommand());
+program.addCommand(createReportCommand());
+program.addCommand(createPDFCommand());
 
 program.parse();

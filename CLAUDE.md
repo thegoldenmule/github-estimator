@@ -43,6 +43,12 @@ bun run start analyze --user octocat
 
 # Specify date range
 bun run start analyze --user octocat --since 2024-01-01 --until 2024-12-31
+
+# Export CSV files (summary + per-repo commits)
+bun run start report --user octocat --output ./reports
+
+# Generate PDF report from exported CSVs
+bun run start pdf --input ./reports --output ./reports/report.pdf
 ```
 
 Requires `GITHUB_TOKEN` environment variable.
@@ -53,13 +59,22 @@ Requires `GITHUB_TOKEN` environment variable.
 src/
 ├── index.ts              # CLI entry point (Commander setup)
 ├── commands/
-│   └── analyze.ts        # Analyze command implementation
+│   ├── analyze.ts        # Analyze command implementation
+│   ├── loc.ts            # LOC command implementation
+│   ├── report.ts         # CSV export command
+│   └── pdf.ts            # PDF generation command
 ├── services/
 │   └── github.ts         # Octokit wrapper for GitHub API
 ├── analyzers/
-│   └── contributions.ts  # Contribution analysis and formatting
+│   ├── contributions.ts  # Contribution analysis and formatting
+│   └── loc.ts            # LOC analysis and formatting
+├── formatters/
+│   ├── csv.ts            # CSV read/write (summary + per-repo commits)
+│   └── pdf.ts            # PDF generation with pie chart and tables
 └── types/
     └── index.ts          # TypeScript interfaces
 ```
 
 **Data flow:** CLI → Command → GitHub Service → Analyzer → Formatted Output
+
+**Report flow:** `report` command → GitHub API → CSV files → `pdf` command → PDF

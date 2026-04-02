@@ -102,3 +102,30 @@ export interface CommitLOCData {
   additions: number;
   deletions: number;
 }
+
+// Report command types
+export interface CommitDetail {
+  sha: string;
+  date: string;
+  repository: string;
+  message: string;
+}
+
+export interface ReportOptions {
+  user: string;
+  since?: string;
+  until?: string;
+  output?: string;
+}
+
+export interface PDFOptions {
+  input: string;
+  output?: string;
+}
+
+export interface SummaryRow {
+  repository: string;
+  contributions: number;
+  percentage: number;
+  isPrivate: boolean;
+}

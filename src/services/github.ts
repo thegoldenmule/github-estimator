@@ -5,6 +5,7 @@ import type {
   RepositoryContribution,
   GraphQLUserResponse,
   CommitLOCData,
+  CommitDetail,
 } from "../types";
 
 const CONTRIBUTIONS_QUERY = `
@@ -170,6 +171,7 @@ interface SearchCommitItem {
     author: {
       date: string;
     };
+    message: string;
   };
   repository: {
     full_name: string;
@@ -277,6 +279,72 @@ export async function fetchUserLOCData(
     }
 
     // Progress indicator
+    if (processedChunks % 12 === 0 || processedChunks === chunks.length) {
+      console.log(`  Processed ${processedChunks}/${chunks.length} months (${results.length} commits found)`);
+    }
+  }
+
+  return results;
+}
+
+export async function fetchUserCommitDetails(
+  username: string,
+  since: Date,
+  until: Date
+): Promise<CommitDetail[]> {
+  const client = getOctokit();
+  const results: CommitDetail[] = [];
+  const seenShas = new Set<string>();
+
+  const chunks = splitIntoMonthChunks(since, until);
+  let processedChunks = 0;
+
+  for (const chunk of chunks) {
+    processedChunks++;
+    const sinceStr = chunk.from.toISOString().slice(0, 10);
+    const untilStr = chunk.to.toISOString().slice(0, 10);
+    const query = `author:${username} committer-date:${sinceStr}..${untilStr}`;
+
+    let page = 1;
+    const perPage = 100;
+    let hasMore = true;
+
+    while (hasMore) {
+      const response = await client.request("GET /search/commits", {
+        q: query,
+        per_page: perPage,
+        page,
+        headers: {
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      });
+
+      const data = response.data as SearchCommitsResponse;
+
+      if (data.items.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const item of data.items) {
+        if (seenShas.has(item.sha)) continue;
+        seenShas.add(item.sha);
+
+        results.push({
+          sha: item.sha,
+          date: item.commit.author.date,
+          repository: item.repository.full_name,
+          message: item.commit.message.split("\n")[0] ?? "",
+        });
+      }
+
+      if (data.items.length < perPage || page * perPage >= 1000) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+
     if (processedChunks % 12 === 0 || processedChunks === chunks.length) {
       console.log(`  Processed ${processedChunks}/${chunks.length} months (${results.length} commits found)`);
     }
